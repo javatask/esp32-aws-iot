@@ -40,6 +40,12 @@ MQTTClient client = MQTTClient(256);
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP);
 
+// deep sleep
+#define uS_TO_S_FACTOR 1000000  /* Conversion factor for micro seconds to seconds */
+#define TIME_TO_SLEEP  15        /* Time ESP32 will go to sleep (in seconds) */
+
+RTC_DATA_ATTR int bootCount = 0;
+
 void connectToWiFi() {
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -94,6 +100,7 @@ void connectToAWS()
 
 void sendJsonToAWS()
 {
+  timeClient.update();
   StaticJsonDocument<128> jsonDoc;
   JsonObject stateObj = jsonDoc.createNestedObject("state");
   JsonObject reportedObj = jsonDoc.createNestedObject("reported");
@@ -124,8 +131,10 @@ void sendJsonToAWS()
 void setup() {
   Serial.begin(9600);
   dht.begin();
-
-  Serial.println(F("DHTxx test!"));
+  
+  //Increment boot number and print it every reboot
+  ++bootCount;
+  Serial.println("Boot number: " + String(bootCount));
 
   connectToWiFi();
   connectToAWS();
@@ -138,11 +147,27 @@ void setup() {
   // GMT -1 = -3600
   // GMT 0 = 0
   timeClient.setTimeOffset(7200);
+
+
+  /*
+  First we configure the wake up source
+  We set our ESP32 to wake up every 5 seconds
+  */
+  esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
+  Serial.println("Setup ESP32 to sleep for every " + String(TIME_TO_SLEEP) +
+  " Seconds");
+
+  sendJsonToAWS();
+  //client.loop();
+  delay(5000);
+
+
+  Serial.println("Going to sleep now");
+  delay(1000);
+  Serial.flush(); 
+  esp_deep_sleep_start();
 }
 
 void loop() {
-  timeClient.update();
-  sendJsonToAWS();
-  client.loop();
-  delay(10000);
+  //timeClient.update();
 }
