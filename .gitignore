@@ -68,6 +68,6 @@ manifest.mf
 nbbuild.xml
 nbproject
 
-/esp32/certs.h
+certs.h
 *.bin
 *.elf
