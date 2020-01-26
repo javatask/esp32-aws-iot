@@ -1,5 +1,3 @@
-#include "DHT.h"
-
 // AWS IOT
 #include "certs.h"
 #include <WiFiClientSecure.h>
@@ -11,12 +9,9 @@
 #include <WiFiUdp.h>
 
 #include "WiFi.h"
+#include <OneWire.h>
 
-#define DHTPIN 27
-#define DHTTYPE DHT11
-
-DHT dht(DHTPIN, DHTTYPE);
-
+OneWire ds(25);
 
 // Wifi credentials
 const char *WIFI_SSID = "alans";
@@ -41,25 +36,28 @@ WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP);
 
 // deep sleep
-#define uS_TO_S_FACTOR 1000000  /* Conversion factor for micro seconds to seconds */
-#define TIME_TO_SLEEP  15        /* Time ESP32 will go to sleep (in seconds) */
+#define uS_TO_S_FACTOR 1000000 /* Conversion factor for micro seconds to seconds */
+#define TIME_TO_SLEEP 15       /* Time ESP32 will go to sleep (in seconds) */
 
 RTC_DATA_ATTR int bootCount = 0;
 
-void connectToWiFi() {
+void connectToWiFi()
+{
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
   // Only try 15 times to connect to the WiFi
   int retries = 0;
-  while (WiFi.status() != WL_CONNECTED && retries < 15){
+  while (WiFi.status() != WL_CONNECTED && retries < 15)
+  {
     delay(500);
     Serial.print(".");
     retries++;
   }
 
   // If we still couldn't connect to the WiFi, go to deep sleep for a minute and try again.
-  if(WiFi.status() != WL_CONNECTED){
+  if (WiFi.status() != WL_CONNECTED)
+  {
     Serial.print("Unable to connect");
     //esp_sleep_enable_timer_wakeup(1 * 60L * 1000000L);
     //esp_deep_sleep_start();
@@ -80,7 +78,8 @@ void connectToAWS()
   int retries = 0;
   Serial.print("Connecting to AWS IOT");
 
-  while (!client.connect(DEVICE_NAME) && retries < AWS_MAX_RECONNECT_TRIES) {
+  while (!client.connect(DEVICE_NAME) && retries < AWS_MAX_RECONNECT_TRIES)
+  {
     Serial.print(".");
     delay(100);
     retries++;
@@ -88,7 +87,8 @@ void connectToAWS()
 
   // Make sure that we did indeed successfully connect to the MQTT broker
   // If not we just end the function and wait for the next loop.
-  if(!client.connected()){
+  if (!client.connected())
+  {
     Serial.println(" Timeout!");
     return;
   }
@@ -98,27 +98,175 @@ void connectToAWS()
   Serial.println("Connected!");
 }
 
+float getTemperature()
+{
+  int HighByte, LowByte, TReading, SignBit, Tc_100, Whole, Fract;
+
+  byte i;
+
+  byte present = 0;
+
+  byte data[12];
+
+  byte addr[8];
+
+  ds.reset_search();
+
+  if (!ds.search(addr))
+  {
+
+    Serial.print("No more addresses.\n"); //  "Адресов больше нет.\n")
+
+    ds.reset_search();
+
+    return 0;
+  }
+
+  Serial.print("R=");
+
+  for (i = 0; i < 8; i++)
+  {
+
+    Serial.print(addr[i], HEX);
+
+    Serial.print(" ");
+  }
+
+  if (OneWire::crc8(addr, 7) != addr[7])
+  {
+
+    Serial.print("CRC is not valid!\n"); //  "CRC не корректен!\n")
+
+    return 0;
+  }
+
+  if (addr[0] == 0x10)
+  {
+
+    Serial.print("Device is a DS18S20 family device.\n"); //  "Устройство принадлежит семейству DS18S20.\n")
+  }
+
+  else if (addr[0] == 0x28)
+  {
+
+    Serial.print("Device is a DS18B20 family device.\n"); //  "Устройство принадлежит семейству DS18B20.\n")
+  }
+
+  else
+  {
+
+    Serial.print("Device family is not recognized: 0x"); //  "Семейство устройства не распознано.\n")
+
+    Serial.println(addr[0], HEX);
+
+    return 0;
+  }
+
+  ds.reset();
+
+  ds.select(addr);
+
+  ds.write(0x44, 1); // запускаем конверсию и включаем паразитное питание
+
+  delay(1000); // 750 миллисекунд может хватить, а может и нет
+
+  // здесь можно использовать ds.depower(), но об этом позаботится сброс
+
+  present = ds.reset();
+
+  ds.select(addr);
+
+  ds.write(0xBE); // считываем scratchpad-память
+
+  Serial.print("P=");
+
+  Serial.print(present, HEX);
+
+  Serial.print(" ");
+
+  for (i = 0; i < 9; i++)
+  { // нам нужно 9 байтов
+
+    data[i] = ds.read();
+
+    Serial.print(data[i], HEX);
+
+    Serial.print(" ");
+  }
+
+  Serial.print(" CRC=");
+
+  Serial.print(OneWire::crc8(data, 8), HEX);
+
+  Serial.println();
+
+  LowByte = data[0];
+
+  HighByte = data[1];
+
+  TReading = (HighByte << 8) + LowByte;
+
+  SignBit = TReading & 0x8000; // проверяем значение в самом старшем бите
+
+  if (SignBit) // если значение отрицательное
+
+  {
+
+    TReading = (TReading ^ 0xffff) + 1;
+  }
+
+  Tc_100 = (6 * TReading) + TReading / 4; // умножаем на (100 * 0.0625) или 6.25
+
+  Whole = Tc_100 / 100; // отделяем друг от друга целую и дробную порции
+
+  Fract = Tc_100 % 100;
+
+  if (SignBit) // если число отрицательное
+
+  {
+
+    Serial.print("-");
+  }
+
+  Serial.print(Whole);
+
+  Serial.print(".");
+
+  if (Fract < 10)
+
+  {
+
+    Serial.print("0");
+  }
+
+  Serial.print(Fract);
+
+  Serial.print("\n");
+
+  return Whole;
+}
+
 void sendJsonToAWS()
 {
   timeClient.update();
   StaticJsonDocument<128> jsonDoc;
   JsonObject stateObj = jsonDoc.createNestedObject("state");
   JsonObject reportedObj = jsonDoc.createNestedObject("reported");
-  
+
   // Write the temperature & humidity. Here you can use any C++ type (and you can refer to variables)
   // Reading temperature or humidity takes about 250 milliseconds!
   // Sensor readings may also be up to 2 seconds 'old' (its a very slow sensor)
-  float h = dht.readHumidity();
+  // float h = dht.readHumidity();
   // Read temperature as Celsius (the default)
-  float t = dht.readTemperature();
-  reportedObj["temperature"] = t;
-  reportedObj["humidity"] = h;
+  // float t = dht.readTemperature();
+  reportedObj["temperature"] = getTemperature();
+  //reportedObj["humidity"] = 65;
   reportedObj["wifi_strength"] = WiFi.RSSI();
   reportedObj["timestamp"] = timeClient.getEpochTime();
-  
+
   // Create a nested object "location"
   JsonObject locationObj = reportedObj.createNestedObject("location");
-  locationObj["name"] = "Garden";
+  locationObj["name"] = "Melashchenko";
 
   Serial.println("Publishing message to AWS...");
   //serializeJson(doc, Serial);
@@ -128,10 +276,10 @@ void sendJsonToAWS()
   client.publish(AWS_IOT_TOPIC, jsonBuffer);
 }
 
-void setup() {
+void setup()
+{
   Serial.begin(9600);
-  dht.begin();
-  
+
   //Increment boot number and print it every reboot
   ++bootCount;
   Serial.println("Boot number: " + String(bootCount));
@@ -148,26 +296,18 @@ void setup() {
   // GMT 0 = 0
   timeClient.setTimeOffset(7200);
 
-
   /*
   First we configure the wake up source
   We set our ESP32 to wake up every 5 seconds
   */
-  esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
-  Serial.println("Setup ESP32 to sleep for every " + String(TIME_TO_SLEEP) +
-  " Seconds");
+  //esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
+  //Serial.println("Setup ESP32 to sleep for every " + String(TIME_TO_SLEEP) +   " Seconds");
+}
 
+void loop()
+{
+  timeClient.update();
   sendJsonToAWS();
   //client.loop();
   delay(5000);
-
-
-  Serial.println("Going to sleep now");
-  delay(1000);
-  Serial.flush(); 
-  esp_deep_sleep_start();
-}
-
-void loop() {
-  //timeClient.update();
 }
